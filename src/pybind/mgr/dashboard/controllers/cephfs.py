@@ -14,6 +14,7 @@ from ..exceptions import DashboardException
 from ..security import Scope
 from ..services.ceph_service import CephService
 from ..services.cephfs import CephFS as CephFS_
+from ..services.cephfs_mirror import CephFSMirrorService
 from ..services.exception import handle_cephfs_error
 from ..tools import ViewCache, str_to_bool
 from . import APIDoc, APIRouter, CreatePermission, DeletePermission, Endpoint, \
@@ -86,7 +87,7 @@ MIRROR_LAST_SYNCED_SNAP_SCHEMA = {
     'crawl_duration': (str, 'Time taken to scan directory'),
     'datasync_queue_wait_duration': (str, 'Time in data sync queue'),
     'sync_duration': (str, 'Snapshot sync duration'),
-    'sync_time_stamp': (str, 'Time of the last sync'),
+    'sync_time_stamp': (str, 'Wall-clock time when the snapshot sync finished'),
     'sync_bytes': (str, 'Bytes synced for the snapshot'),
     'sync_files': (int, 'Number of files synced for the snapshot'),
 }
@@ -1457,15 +1458,7 @@ class CephFSMirror(RESTController):
     @Endpoint('POST')
     @CreatePermission
     def token(self, fs_name: str, client_name: str, site_name: str):
-        error_code, out, err = mgr.remote(
-            'mirroring', 'snapshot_mirror_peer_bootstrap_create', fs_name, client_name, site_name)
-        if error_code != 0:
-            raise DashboardException(
-                msg=f'Failed to create bootstrap token: {err}',
-                code=error_code,
-                component='cephfs.mirror'
-            )
-        return json.loads(out)
+        return CephFSMirrorService.create_bootstrap_token(fs_name, client_name, site_name)
 
     @EndpointDoc("Create bootstrap peer",
                  parameters={
@@ -1635,7 +1628,7 @@ class CephFSMirror(RESTController):
 
     @EndpointDoc("Get mirror daemon and peers information",
                  responses={200: DAEMON_STATUS_SCHEMA})
-    @Endpoint('GET', path='/daemon-status')
+    @Endpoint('GET', path='/daemon/status')
     @ReadPermission
     def daemon_status(self):
         error_code, out, err = mgr.remote('mirroring', 'snapshot_mirror_daemon_status')

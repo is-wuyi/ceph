@@ -521,21 +521,14 @@ class CephFSMirrorTest(ControllerTestCase):  # pylint: disable=too-many-public-m
     def test_mirror_status_success(self):
         fs_name = 'test_fs'
         peer_uuid = 'peer-uuid-123'
+        last_synced_snap = {
+            'name': 'snap1',
+            'sync_bytes': '1.00 KiB',
+            'sync_time_stamp': '1704189600.000000s'
+        }
+        peer_status = {'state': 'idle', 'last_synced_snap': last_synced_snap}
         expected_status = {
-            'metrics': {
-                '/dir1': {
-                    'peer': {
-                        peer_uuid: {
-                            'state': 'idle',
-                            'last_synced_snap': {
-                                'name': 'snap1',
-                                'sync_bytes': '1.00 KiB',
-                                'sync_time_stamp': '1704189600.000000s'
-                            }
-                        }
-                    }
-                }
-            }
+            'metrics': {'/dir1': {'peer': {peer_uuid: peer_status}}}
         }
         mock_output = json.dumps(expected_status)
         mgr.remote = Mock(return_value=(0, mock_output, ''))
