@@ -123,6 +123,18 @@ jobs:
           path: src/pybind/mgr/dashboard/frontend/dist/
           retention-days: 7
 
+      - name: Ensure Dockerfile.dashboard exists
+        run: |
+          # source_ref (e.g. v18.2.8) may not contain .github/workflows/Dockerfile.dashboard
+          # fetch it from main branch if missing
+          if [ ! -f .github/workflows/Dockerfile.dashboard ]; then
+            echo "Dockerfile.dashboard not found in ${{ inputs.source_ref }}, fetching from main"
+            git fetch --depth=1 origin main
+            git checkout origin/main -- .github/workflows/Dockerfile.dashboard
+          fi
+          echo "=== Dockerfile.dashboard ==="
+          cat .github/workflows/Dockerfile.dashboard
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
