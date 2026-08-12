@@ -58,6 +58,38 @@ jobs:
         working-directory: src/pybind/mgr/dashboard/frontend
         run: npm ci
 
+      - name: Backport translations from main branch
+        run: |
+          # Published Ceph tags (v18.x, v19.x) ship translation files with
+          # untranslated <target> (English source copied as target). The main
+          # branch contains community-contributed translations that are
+          # ID-compatible with tagged releases. Fetch main and overlay its
+          # translation files so the build produces a localized dashboard.
+          git fetch --depth=1 origin main
+          LOCALE_DIR="src/pybind/mgr/dashboard/frontend/src/locale"
+          echo "=== 翻译文件中文 target 数量 (backport 前) ==="
+          python3 -c "
+          import re
+          with open('${LOCALE_DIR}/messages.zh-CN.xlf') as f:
+              c = f.read()
+          targets = re.findall(r'<target>([^<]*)</target>', c)
+          chinese = [t for t in targets if re.search(r'[\u4e00-\u9fff]', t)]
+          print(f'zh-CN: {len(chinese)}/{len(targets)} 含中文')
+          "
+          echo "=== 从 main 分支获取翻译文件 ==="
+          for lang in cs de-DE es-ES fr-FR id-ID it-IT ja-JP ko-KR pl-PL pt-BR zh-CN zh-TW; do
+            git checkout origin/main -- "${LOCALE_DIR}/messages.${lang}.xlf" 2>/dev/null && echo "  更新 messages.${lang}.xlf" || echo "  跳过 messages.${lang}.xlf (main 中不存在)"
+          done
+          echo "=== 翻译文件中文 target 数量 (backport 后) ==="
+          python3 -c "
+          import re
+          with open('${LOCALE_DIR}/messages.zh-CN.xlf') as f:
+              c = f.read()
+          targets = re.findall(r'<target>([^<]*)</target>', c)
+          chinese = [t for t in targets if re.search(r'[\u4e00-\u9fff]', t)]
+          print(f'zh-CN: {len(chinese)}/{len(targets)} 含中文')
+          "
+
       - name: Fix translation file target-language mismatches
         working-directory: src/pybind/mgr/dashboard/frontend/src/locale
         run: |
