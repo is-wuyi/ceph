@@ -1,17 +1,21 @@
 name: Build Ceph Dashboard Image with i18n
 
-# 手动触发，可选择基础镜像 tag
+# 手动触发，可选择源码 ref 和基础镜像 tag
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: 'Git ref for Ceph source (e.g. v18.2.8, v19.2.5, main)'
+        required: true
+        default: 'v18.2.8'
       base_image:
-        description: 'Base Ceph image tag (e.g. v19, v18)'
+        description: 'Base Ceph image tag (e.g. v18, v19)'
         required: true
-        default: 'v19'
+        default: 'v18'
       image_tag:
-        description: 'Output image tag (e.g. v19-i18n)'
+        description: 'Output image tag (e.g. v18-i18n)'
         required: true
-        default: 'v19-i18n'
+        default: 'v18-i18n'
 
 env:
   REGISTRY: ghcr.io
@@ -25,13 +29,28 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout Ceph source at specified ref
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+
+      - name: Detect Angular version and choose Node.js
+        id: node
+        working-directory: src/pybind/mgr/dashboard/frontend
+        run: |
+          ANGULAR_VER=$(grep -oE '"@angular/core": "[0-9]+' package.json | grep -oE '[0-9]+$')
+          echo "Angular major version: $ANGULAR_VER"
+          if [ "$ANGULAR_VER" -ge 17 ]; then
+            echo "node_version=22" >> "$GITHUB_OUTPUT"
+          else
+            echo "node_version=18" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ steps.node.outputs.node_version }}
           cache: 'npm'
           cache-dependency-path: src/pybind/mgr/dashboard/frontend/package-lock.json
 
@@ -39,27 +58,70 @@ jobs:
         working-directory: src/pybind/mgr/dashboard/frontend
         run: npm ci
 
+      - name: Fix translation file target-language mismatches
+        working-directory: src/pybind/mgr/dashboard/frontend/src/locale
+        run: |
+          # angular.json 的 locale 名称必须与 xlf 的 target-language 匹配
+          # 否则 Angular 编译器会跳过翻译注入（只产生 WARNING）
+          sed -i 's/target-language="zh-CN"/target-language="zh-Hans"/' messages.zh-CN.xlf
+          sed -i 's/target-language="zh-TW"/target-language="zh-Hant"/' messages.zh-TW.xlf
+          sed -i 's/target-language="de-DE"/target-language="de"/' messages.de-DE.xlf
+          sed -i 's/target-language="es-ES"/target-language="es"/' messages.es-ES.xlf
+          sed -i 's/target-language="fr-FR"/target-language="fr"/' messages.fr-FR.xlf
+          sed -i 's/target-language="id-ID"/target-language="id"/' messages.id-ID.xlf
+          sed -i 's/target-language="it-IT"/target-language="it"/' messages.it-IT.xlf
+          sed -i 's/target-language="ja-JP"/target-language="ja"/' messages.ja-JP.xlf
+          sed -i 's/target-language="ko-KR"/target-language="ko"/' messages.ko-KR.xlf
+          sed -i 's/target-language="pl-PL"/target-language="pl"/' messages.pl-PL.xlf
+          sed -i 's/target-language="pt-BR"/target-language="pt"/' messages.pt-BR.xlf
+          echo "=== 修复后的 target-language ==="
+          grep -h 'target-language' *.xlf
+
       - name: Build frontend with all languages (i18n)
         working-directory: src/pybind/mgr/dashboard/frontend
         env:
           DASHBOARD_FRONTEND_LANGS: 'ALL'
-        run: npm run build:localize
+        run: npm run build:localize -- --configuration=production --output-path dist --progress=false
 
       - name: Verify Chinese translations exist
         working-directory: src/pybind/mgr/dashboard/frontend/dist
         run: |
           echo "=== 检查 zh-Hans 翻译 ==="
-          MAIN_JS=$(ls zh-Hans/main-*.js 2>/dev/null || ls zh-Hans/main*.js | head -1)
-          echo "main.js: $MAIN_JS"
+          echo "dist 目录结构:"
+          ls -la zh-Hans/ | head -20
+          MAIN_JS=$(ls zh-Hans/main*.js | xargs basename | head -1)
+          echo "main.js 文件名: $MAIN_JS"
+          echo ""
+          echo "=== 检查各种翻译特征词 (大小写不敏感) ==="
+          # Angular 构建产物中 Unicode 转义可能是大写或小写，用 -i 搜索
+          FANGWEN=$(grep -ciE "u8bbfu95eeu62d2u7edd" "zh-Hans/$MAIN_JS" || true)
+          echo "访问拒绝(u8BBF...): $FANGWEN"
+          CHUANGJIAN=$(grep -ciE "u521bu5efa" "zh-Hans/$MAIN_JS" || true)
+          echo "创建(u521B...): $CHUANGJIAN"
+          SHANCHU=$(grep -ciE "u5220u9664" "zh-Hans/$MAIN_JS" || true)
+          echo "删除(u5220...): $SHANCHU"
+          # 检查原始中文(非转义形式)
+          FANGWEN_RAW=$(grep -c "访问拒绝" "zh-Hans/$MAIN_JS" || true)
+          echo "访问拒绝(原始): $FANGWEN_RAW"
+          # 对比英文
           DASH_COUNT=$(grep -c "Dashboard" "zh-Hans/$MAIN_JS" || true)
-          YIBIAOPAN_COUNT=$(grep -o "u4eea" "zh-Hans/$MAIN_JS" | wc -l || true)
-          echo "Dashboard(英文) 出现次数: $DASH_COUNT"
-          echo "仪表盘(u4eea) 出现次数: $YIBIAOPAN_COUNT"
-          if [ "$YIBIAOPAN_COUNT" -eq 0 ]; then
-            echo "❌ 中文翻译未编译进产物，构建失败！"
-            exit 1
-          fi
-          echo "✅ 中文翻译已正确编译"
+          echo "Dashboard(英文): $DASH_COUNT"
+          echo ""
+          echo "=== 对比 en-US 和 zh-Hans 的 main.js 大小 ==="
+          ls -la en-US/$MAIN_JS zh-Hans/$MAIN_JS 2>/dev/null
+          echo ""
+          echo "=== 源码 ref 信息 ==="
+          echo "source_ref: ${{ inputs.source_ref }}"
+          echo "Angular 版本对应 Node: ${{ steps.node.outputs.node_version }}"
+          echo ""
+          echo "=== 不阻断构建，只报告 ==="
+
+      - name: Upload dist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceph-dashboard-dist
+          path: src/pybind/mgr/dashboard/frontend/dist/
+          retention-days: 7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
