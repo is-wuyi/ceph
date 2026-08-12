@@ -1,0 +1,12 @@
+# 基于官方 Ceph 镜像，替换 Dashboard 前端产物（带完整 i18n 翻译）
+# 构建参数: BASE_IMAGE=quay.io/ceph/ceph:v19
+# 注意: Dockerfile 必须放在能访问 src/pybind/mgr/dashboard/frontend/dist/ 的上下文中
+
+ARG BASE_IMAGE=quay.io/ceph/ceph:v19
+FROM ${BASE_IMAGE}
+
+# 构建好的前端产物会覆盖镜像里的英文版
+# dist 目录结构: dist/en-US/, dist/zh-Hans/, dist/ja/ ... 等语言子目录
+COPY src/pybind/mgr/dashboard/frontend/dist/ /usr/share/ceph/mgr/dashboard/frontend/dist/
+
+# 镜像的 entrypoint/cmd 继承自基础镜像，无需修改

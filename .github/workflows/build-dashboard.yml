@@ -1,11 +1,29 @@
-name: Build Ceph Dashboard Frontend with i18n
+name: Build Ceph Dashboard Image with i18n
 
+# 手动触发，可选择基础镜像 tag
 on:
   workflow_dispatch:
+    inputs:
+      base_image:
+        description: 'Base Ceph image tag (e.g. v19, v18)'
+        required: true
+        default: 'v19'
+      image_tag:
+        description: 'Output image tag (e.g. v19-i18n)'
+        required: true
+        default: 'v19-i18n'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/ceph-i18n
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -13,21 +31,64 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: src/pybind/mgr/dashboard/frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Install frontend dependencies
         working-directory: src/pybind/mgr/dashboard/frontend
         run: npm ci
 
-      - name: Build with localization
+      - name: Build frontend with all languages (i18n)
         working-directory: src/pybind/mgr/dashboard/frontend
+        env:
+          DASHBOARD_FRONTEND_LANGS: 'ALL'
         run: npm run build:localize
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Verify Chinese translations exist
+        working-directory: src/pybind/mgr/dashboard/frontend/dist
+        run: |
+          echo "=== 检查 zh-Hans 翻译 ==="
+          MAIN_JS=$(ls zh-Hans/main-*.js 2>/dev/null || ls zh-Hans/main*.js | head -1)
+          echo "main.js: $MAIN_JS"
+          DASH_COUNT=$(grep -c "Dashboard" "zh-Hans/$MAIN_JS" || true)
+          YIBIAOPAN_COUNT=$(grep -o "u4eea" "zh-Hans/$MAIN_JS" | wc -l || true)
+          echo "Dashboard(英文) 出现次数: $DASH_COUNT"
+          echo "仪表盘(u4eea) 出现次数: $YIBIAOPAN_COUNT"
+          if [ "$YIBIAOPAN_COUNT" -eq 0 ]; then
+            echo "❌ 中文翻译未编译进产物，构建失败！"
+            exit 1
+          fi
+          echo "✅ 中文翻译已正确编译"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          name: ceph-dashboard-dist
-          path: src/pybind/mgr/dashboard/frontend/dist/
-          retention-days: 30
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ inputs.image_tag }}
+            type=raw,value=latest
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .github/workflows/Dockerfile.dashboard
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=quay.io/ceph/ceph:${{ inputs.base_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
